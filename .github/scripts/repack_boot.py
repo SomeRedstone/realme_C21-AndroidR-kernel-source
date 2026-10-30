@@ -6,19 +6,26 @@ ramdisk after it, then a 64-byte big-endian MediaTek dtbo table followed by
 mt6765.dtb. The AVB footer is dropped because it signs the old image; the
 result is for an unlocked bootloader (fastboot boot / fastboot flash boot).
 
-usage: repack_boot.py stock.img Image.gz out.img [--dtb mt6765.dtb]
+usage: repack_boot.py [stock.img] [Image.gz] [out.img] [--dtb mt6765.dtb]
+
+The stock image defaults to stock/boot.img in this repo.
 """
 import hashlib
 import struct
 import sys
 from pathlib import Path
 
-args = [a for a in sys.argv[1:] if not a.startswith("--")]
-opts = dict(zip(sys.argv[1::2], sys.argv[2::2]))
-stock_p = Path(args[0] if len(args) > 0 else "/home/omar/stock/boot.img")
+argv = sys.argv[1:]
+built_dtb = None
+if "--dtb" in argv:
+    i = argv.index("--dtb")
+    built_dtb = Path(argv[i + 1])
+    del argv[i:i + 2]
+args = argv
+
+stock_p = Path(args[0] if len(args) > 0 else "stock/boot.img")
 kernel_p = Path(args[1] if len(args) > 1 else "out/arch/arm64/boot/Image.gz")
 out_p = Path(args[2] if len(args) > 2 else "dist/boot.img")
-built_dtb = Path(opts["--dtb"]) if "--dtb" in opts else None
 
 PAGE = 2048
 HDR_V2_SIZE = 1660

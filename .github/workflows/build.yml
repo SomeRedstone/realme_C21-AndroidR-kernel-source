@@ -16,7 +16,7 @@ on:
         type: boolean
         default: false
       boot_img_url:
-        description: URL of a stock boot.img to repack (optional)
+        description: optional stock boot.img URL, used instead of stock/boot.img
         default: ""
       boot_img_sha256:
         description: sha256 of boot_img_url (optional)
@@ -261,22 +261,28 @@ jobs:
           sha256sum "dist/$name.zip"
 
       - name: Repack boot.img
-        if: github.event_name == 'workflow_dispatch' && inputs.boot_img_url != ''
         env:
           BOOT_IMG_URL: ${{ inputs.boot_img_url }}
           BOOT_IMG_SHA256: ${{ inputs.boot_img_sha256 }}
           ARTIFACT: ${{ steps.package.outputs.name }}
         run: |
           set -euo pipefail
-          curl -fsSL --retry 3 "$BOOT_IMG_URL" -o dist/stock-boot.img
-          if [ -n "$BOOT_IMG_SHA256" ]; then
-            echo "$BOOT_IMG_SHA256  dist/stock-boot.img" | sha256sum -c -
+          stock_sha=cf0e844ac5bde819542ab6088e5901ae0398515207548db8b958ef3b4f9e822e
+          if [ -n "$BOOT_IMG_URL" ]; then
+            curl -fsSL --retry 3 "$BOOT_IMG_URL" -o dist/stock-boot.img
+            if [ -n "$BOOT_IMG_SHA256" ]; then
+              echo "$BOOT_IMG_SHA256  dist/stock-boot.img" | sha256sum -c -
+            fi
+          else
+            cp stock/boot.img dist/stock-boot.img
+            echo "$stock_sha  dist/stock-boot.img" | sha256sum -c -
           fi
           python3 .github/scripts/repack_boot.py \
             dist/stock-boot.img out/arch/arm64/boot/Image.gz \
             "dist/$ARTIFACT-boot.img" \
             --dtb out/arch/arm64/boot/dts/mediatek/mt6765.dtb
           rm -f dist/stock-boot.img
+          sha256sum "dist/$ARTIFACT-boot.img"
 
       - name: Upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

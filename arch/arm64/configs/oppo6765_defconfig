@@ -780,8 +780,16 @@ CONFIG_MODULE_SIG_ALL=y
 CONFIG_MODULE_SIG_SHA512=y
 #endif /* OPLUS_FEATURE_SECURITY_COMMON */
 
+# Trust the stock Realme C21 module-signing certificate so the prebuilt
+# vendor modules (f2fs.ko, wmt_drv.ko, ...) pass MODULE_SIG_FORCE.
+CONFIG_SYSTEM_TRUSTED_KEYS="certs/realme-c21-stock-module-signing-key.pem"
+
 #ifdef OPLUS_FEATURE_SIM
 CONFIG_SIM_DETECT=y
 #endif
 
 
+
+# KernelSU-Next (manual hook mode)
+CONFIG_KSU=y
+CONFIG_KSU_MANUAL_HOOK=y

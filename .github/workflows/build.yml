@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [master, ksun-susfs]
+    branches: [master]
   workflow_dispatch:
     inputs:
       defconfig:
@@ -21,6 +21,8 @@ on:
       boot_img_sha256:
         description: sha256 of boot_img_url (optional)
         default: ""
+  schedule:
+    - cron: "0 12 * * *"
 
 permissions:
   contents: write
@@ -30,7 +32,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check:
+    if: github.event_name == 'schedule' || inputs.sync_ksu == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.pin.outputs.changed }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Compare with upstream
+        id: pin
+        run: |
+          set -euo pipefail
+          upstream=$(git ls-remote https://github.com/KernelSU-Next/KernelSU-Next.git refs/heads/legacy | cut -f1)
+          pinned=$(sed -n 's/^commit=//p' .github/ksu-next.pin)
+          echo "upstream: $upstream"
+          echo "pinned:   $pinned"
+          if [ -z "$upstream" ]; then
+            echo "::error::could not read refs/heads/legacy from KernelSU-Next"
+            exit 1
+          fi
+          if [ "$upstream" = "$pinned" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: check
+    if: always() && (github.event_name != 'schedule' || needs.check.outputs.changed == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -45,7 +78,7 @@ jobs:
 
       - name: Sync KernelSU-Next legacy
         id: sync
-        if: inputs.sync_ksu == true
+        if: github.event_name == 'schedule' || inputs.sync_ksu == true
         shell: bash
         run: |
           set -euo pipefail

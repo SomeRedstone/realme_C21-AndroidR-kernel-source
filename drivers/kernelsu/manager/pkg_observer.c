@@ -8,6 +8,9 @@
 #include <linux/sched.h>
 #include <linux/task_work.h>
 #include <linux/version.h>
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#endif
 #include "klog.h" // IWYU pragma: keep
 #include "throne_tracker.h"
 #include "runtime/ksud_boot.h"
@@ -42,6 +45,9 @@ static void ksu_track_throne_tw_func(struct callback_head *cb)
 	if (current->flags & PF_EXITING)
 		return;
 	track_throne(false);
+#ifdef CONFIG_KSU_SUSFS
+	susfs_parse_priority_app_strings();
+#endif
 }
 
 static void ksu_defer_track_throne(void)

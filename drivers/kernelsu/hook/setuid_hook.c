@@ -1,8 +1,9 @@
 #include <linux/compiler.h>
 #include <linux/version.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
-#include <linux/sched/signal.h>
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs_def.h>
 #endif
+#include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/task_work.h>
 #include <linux/thread_info.h>
@@ -25,6 +26,16 @@
 #include "hook/hook_manager.h"
 #include "feature/kernel_umount.h"
 #include "compat/kernel_compat.h"
+
+#ifdef CONFIG_KSU_SUSFS
+extern struct work_struct susfs_extra_works;
+
+static inline void ksu_handle_extra_susfs_work(void)
+{
+	if (!work_pending(&susfs_extra_works))
+		schedule_work(&susfs_extra_works);
+}
+#endif
 
 int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
 {
@@ -51,6 +62,14 @@ int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
         return 0;
     }
 
+#ifdef CONFIG_KSU_SUSFS
+    if (unlikely(new_uid == WEBVIEW_ZYGOTE_UID))
+        return 0;
+
+    if (likely(is_appuid(new_uid) && ksu_uid_should_umount(new_uid)))
+        goto do_umount;
+#endif
+
     if (ksu_is_allow_uid_for_current(new_uid)) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
         if (current->seccomp.mode == SECCOMP_MODE_FILTER && current->seccomp.filter) {
@@ -69,8 +88,17 @@ int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
 #endif
     }
 
+#ifndef CONFIG_KSU_SUSFS
     // Handle kernel umount
     ksu_handle_umount(old_uid, new_uid);
+#else
+    return 0;
+
+do_umount:
+    ksu_handle_umount(old_uid, new_uid);
+    ksu_handle_extra_susfs_work();
+    susfs_set_current_proc_umounted();
+#endif
 
     return 0;
 }

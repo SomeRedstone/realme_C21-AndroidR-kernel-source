@@ -1,0 +1,292 @@
+name: build
+
+on:
+  push:
+    branches: [master, ksun-susfs]
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: defconfig to build
+        default: oppo6765_defconfig
+      extra_config:
+        description: path to a config fragment applied after defconfig
+        default: ""
+      sync_ksu:
+        description: update drivers/kernelsu to the latest legacy commit first
+        type: boolean
+        default: false
+      boot_img_url:
+        description: URL of a stock boot.img to repack (optional)
+        default: ""
+      boot_img_sha256:
+        description: sha256 of boot_img_url (optional)
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Free disk space
+        uses: insightsengineering/disk-space-reclaimer@dae9fabcb8febe09f6585471948acf9dc9a57489
+        with:
+          swap-storage: "false"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Sync KernelSU-Next legacy
+        id: sync
+        if: inputs.sync_ksu == true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upstream=$(git ls-remote https://github.com/KernelSU-Next/KernelSU-Next.git refs/heads/legacy | cut -f1)
+          pinned=$(sed -n 's/^commit=//p' .github/ksu-next.pin)
+          echo "upstream: $upstream"
+          echo "pinned:   $pinned"
+
+          if [ "$upstream" = "$pinned" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git clone -q --bare --filter=blob:none --single-branch --branch legacy \
+            https://github.com/KernelSU-Next/KernelSU-Next.git "$RUNNER_TEMP/ksu"
+          count=$(git -C "$RUNNER_TEMP/ksu" rev-list --count "$upstream")
+          tag=$(git -C "$RUNNER_TEMP/ksu" describe --tags --abbrev=0 "$upstream")
+          version=$((30000 + count + 289))
+          echo "count:   $count"
+          echo "tag:     $tag"
+          echo "version: $version"
+
+          curl -fsSL --retry 3 \
+            "https://codeload.github.com/KernelSU-Next/KernelSU-Next/tar.gz/$upstream" \
+            -o "$RUNNER_TEMP/ksu.tar.gz"
+          rm -rf drivers/kernelsu
+          mkdir -p drivers/kernelsu
+          tar -xzf "$RUNNER_TEMP/ksu.tar.gz" -C drivers/kernelsu \
+            --strip-components=2 --wildcards '*/kernel/*'
+          if [ -L drivers/kernelsu/include/uapi ]; then
+            rm -f drivers/kernelsu/include/uapi
+            mkdir -p drivers/kernelsu/include/uapi
+            tar -xzf "$RUNNER_TEMP/ksu.tar.gz" -C drivers/kernelsu/include/uapi \
+              --strip-components=2 --wildcards '*/uapi/*'
+          fi
+
+          if ! git apply -p1 --whitespace=nowarn .github/ksu/susfs-glue.patch; then
+            echo "::error::SUSFS glue patch does not apply to $upstream; update .github/ksu/susfs-glue.patch"
+            exit 1
+          fi
+
+          sed -i -E "s|^# Integration pin: KernelSU-Next legacy .*|# Integration pin: KernelSU-Next legacy $tag ($upstream, upstream commit count $count).|" drivers/kernelsu/Kbuild
+          sed -i -E "s|^KSU_VERSION_OVERRIDE \?= .*|KSU_VERSION_OVERRIDE ?= $version|" drivers/kernelsu/Kbuild
+          sed -i -E "s|^KSU_VERSION_TAG_OVERRIDE \?= .*|KSU_VERSION_TAG_OVERRIDE ?= $tag|" drivers/kernelsu/Kbuild
+          grep -q "^KSU_VERSION_OVERRIDE ?= $version\$" drivers/kernelsu/Kbuild
+          grep -q "^KSU_VERSION_TAG_OVERRIDE ?= $tag\$" drivers/kernelsu/Kbuild
+
+          {
+            echo "# KernelSU-Next legacy tree currently in drivers/kernelsu."
+            echo "# Updated by the sync step in .github/workflows/build.yml; keep in sync with"
+            echo "# KSU_VERSION_OVERRIDE in drivers/kernelsu/Kbuild."
+            echo "commit=$upstream"
+            echo "tag=$tag"
+            echo "version=$version"
+          } > .github/ksu-next.pin
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/ksu-next.pin drivers/kernelsu
+          git commit -q -m "chore(ksu): update KernelSU-Next legacy to ${upstream:0:8}"
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            bc bison build-essential ccache cpio curl device-tree-compiler \
+            flex git libelf-dev libssl-dev lz4 python3 rsync unzip xz-utils \
+            zip zstd
+
+      - name: Cache toolchains
+        id: toolchain-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/toolchains
+          key: toolchains-r383902-android-4.9-1
+
+      - name: Fetch toolchains
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          base=https://android.googlesource.com/platform/prebuilts
+          mkdir -p "$HOME/toolchains/clang-r383902" "$HOME/toolchains/aarch64-linux-android-4.9"
+          curl -fsSL --retry 5 --retry-delay 5 \
+            "$base/clang/host/linux-x86/+archive/refs/tags/android-11.0.0_r48/clang-r383902.tar.gz" \
+            | tar -xz -C "$HOME/toolchains/clang-r383902"
+          curl -fsSL --retry 5 --retry-delay 5 \
+            "$base/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz" \
+            | tar -xz -C "$HOME/toolchains/aarch64-linux-android-4.9"
+          "$HOME/toolchains/clang-r383902/bin/clang" --version | head -1
+
+      - name: Helper symlinks
+        run: |
+          mkdir -p "$HOME/toolchains/bin"
+          for t in ar as ld nm objcopy objdump readelf strip elfedit; do
+            ln -sf ../aarch64-linux-android-4.9/bin/aarch64-linux-androidkernel-$t \
+              "$HOME/toolchains/bin/aarch64-linux-gnu-$t"
+          done
+
+      - name: Vendor tree
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/.."
+          rm -rf vendor-src
+          git init -q vendor-src
+          git -C vendor-src remote add origin \
+            https://github.com/realme-kernel-opensource/realme_C21-AndroidR-vendor-source.git
+          git -C vendor-src fetch -q --depth 1 origin 15bf9bb4145529acac79cdddeb7152338c3b0c40
+          git -C vendor-src checkout -q FETCH_HEAD
+          ln -sfn vendor-src/source/vendor vendor
+          ln -sfn "$GITHUB_WORKSPACE" kernel-4.19
+          ln -sfn "$GITHUB_WORKSPACE" vendor-src/source/kernel-4.19
+          test -d "$GITHUB_WORKSPACE/vendor/oplus/kernel"
+          test -d "$GITHUB_WORKSPACE/vendor/oplus/kernel_4.19/ext4"
+
+      - name: Cache ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: |
+            ccache-
+
+      - name: Configure and build
+        env:
+          DEFCONFIG: ${{ inputs.defconfig || 'oppo6765_defconfig' }}
+          EXTRA_CONFIG: ${{ inputs.extra_config }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/toolchains/bin:$HOME/toolchains/clang-r383902/bin:$HOME/toolchains/aarch64-linux-android-4.9/bin:$PATH"
+          export CCACHE_DIR="$HOME/.ccache"
+          export CCACHE_CPP2=yes
+          ccache --max-size=2G >/dev/null
+          ccache --zero-stats >/dev/null
+
+          args=(O=out ARCH=arm64 CC="ccache clang" CLANG_TRIPLE=aarch64-linux-gnu-
+                CROSS_COMPILE=aarch64-linux-androidkernel- LD=ld.lld NM=llvm-nm OBJCOPY=llvm-objcopy)
+
+          make "${args[@]}" "$DEFCONFIG"
+          if [ -n "$EXTRA_CONFIG" ]; then
+            test -f "$EXTRA_CONFIG"
+            cat "$EXTRA_CONFIG" >> out/.config
+            make "${args[@]}" olddefconfig
+          fi
+          grep -c '^CONFIG_KSU_SUSFS' out/.config
+
+          make "${args[@]}" -j"$(nproc)" 2>&1 | tee build.log
+          ccache --show-stats | tail -6
+
+      - name: Check output
+        run: |
+          set -euo pipefail
+          for f in out/arch/arm64/boot/Image.gz out/arch/arm64/boot/dts/mediatek/mt6765.dtb out/vmlinux; do
+            test -s "$f"
+          done
+          strings out/vmlinux | grep -q 'susfs is initialized'
+          strings out/vmlinux | grep -q 'KernelSU version'
+          echo "errors:   $(grep -c ' error:' build.log || true)"
+          echo "warnings: $(grep -c ' warning:' build.log || true)"
+          grep 'module_layout' out/Module.symvers
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          release=$(sed -n 's/^#define UTS_RELEASE "\(.*\)"/\1/p' out/include/generated/utsrelease.h)
+          susfs=$(sed -n 's/^#define SUSFS_VERSION "\(.*\)"/\1/p' include/linux/susfs.h)
+          ksu=$(grep -oE 'KernelSU-Next version( override)?: [0-9]+' build.log | tail -1 | grep -oE '[0-9]+$')
+          ksu_tag=$(grep -oE 'KernelSU-Next tag: .*' build.log | tail -1 | sed 's/.*: //')
+          ksu_commit=$(sed -n 's/^commit=//p' .github/ksu-next.pin)
+          {
+            echo "### $release"
+            echo
+            echo "| item | value |"
+            echo "| --- | --- |"
+            echo "| defconfig | ${{ inputs.defconfig || 'oppo6765_defconfig' }} |"
+            echo "| kernel | $release |"
+            echo "| SUSFS | $susfs |"
+            echo "| KernelSU-Next | $ksu ($ksu_tag) |"
+            echo "| KernelSU-Next commit | \`$ksu_commit\` |"
+            echo "| kernel commit | \`$(git rev-parse HEAD)\` |"
+            echo "| warnings | $(grep -c ' warning:' build.log || true) |"
+            echo "| errors | $(grep -c ' error:' build.log || true) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package AnyKernel3
+        id: package
+        run: |
+          set -euo pipefail
+          release=$(sed -n 's/^#define UTS_RELEASE "\(.*\)"/\1/p' out/include/generated/utsrelease.h)
+          susfs=$(sed -n 's/^#define SUSFS_VERSION "\(.*\)"/\1/p' include/linux/susfs.h)
+          ksu=$(grep -oE 'KernelSU-Next version( override)?: [0-9]+' build.log | tail -1 | grep -oE '[0-9]+$')
+          short=$(git rev-parse --short HEAD)
+          name="realme-c21-${release}-ksun-susfs${susfs#v}-${short}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
+          mkdir -p dist/ak3
+          python3 .github/scripts/mtk_dtbo.py \
+            out/arch/arm64/boot/dts/mediatek/mt6765.dtb dist/dtb
+          curl -fsSL --retry 3 \
+            https://codeload.github.com/osm0sis/AnyKernel3/tar.gz/41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1 \
+            | tar -xz -C dist/ak3 --strip-components=1
+          rm -rf dist/ak3/.github
+          cp out/arch/arm64/boot/Image.gz dist/ak3/Image.gz
+          cp dist/dtb dist/ak3/dtb
+          sed "s|@KERNEL_STRING@|KernelSU-Next $ksu + SUSFS $susfs ($release)|" \
+            .github/ak3/anykernel.sh > dist/ak3/anykernel.sh
+
+          (cd dist/ak3 && zip -q -r9 "../$name.zip" .)
+          rm -rf dist/ak3
+          sha256sum "dist/$name.zip"
+
+      - name: Repack boot.img
+        if: github.event_name == 'workflow_dispatch' && inputs.boot_img_url != ''
+        env:
+          BOOT_IMG_URL: ${{ inputs.boot_img_url }}
+          BOOT_IMG_SHA256: ${{ inputs.boot_img_sha256 }}
+          ARTIFACT: ${{ steps.package.outputs.name }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 "$BOOT_IMG_URL" -o dist/stock-boot.img
+          if [ -n "$BOOT_IMG_SHA256" ]; then
+            echo "$BOOT_IMG_SHA256  dist/stock-boot.img" | sha256sum -c -
+          fi
+          python3 .github/scripts/repack_boot.py \
+            dist/stock-boot.img out/arch/arm64/boot/Image.gz \
+            "dist/$ARTIFACT-boot.img" \
+            --dtb out/arch/arm64/boot/dts/mediatek/mt6765.dtb
+          rm -f dist/stock-boot.img
+
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            dist/*.zip
+            dist/*.img
+          if-no-files-found: error
+
+      - name: Push KernelSU-Next update
+        if: steps.sync.outputs.changed == 'true'
+        run: git push origin HEAD:${{ github.ref_name }}

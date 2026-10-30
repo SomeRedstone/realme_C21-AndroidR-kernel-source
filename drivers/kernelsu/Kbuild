@@ -1,9 +1,7 @@
 kernelsu-objs := core/init.o
 
-# Integration pin: KernelSU-Next legacy commit
-# b933b1f728116a456fbebf27b6a8772a640cdf23 (upstream commit count 3029,
-# newest reachable tag v3.4.0-legacy).  The tree is copied without its .git
-# directory, so keep the version identity explicit here.
+# Integration pin: KernelSU-Next legacy v3.4.0-legacy (b933b1f728116a456fbebf27b6a8772a640cdf23, upstream commit count 3029).
+# The tree is copied without its .git, so the version identity is set here.
 KSU_VERSION_OVERRIDE ?= 33318
 KSU_VERSION_TAG_OVERRIDE ?= v3.4.0-legacy
 

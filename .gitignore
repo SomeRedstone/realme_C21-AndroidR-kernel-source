@@ -85,6 +85,8 @@ modules.builtin
 !.mailmap
 !.cocciconfig
 !.clang-format
+!.github/
+!.github/ksu/susfs-glue.patch
 
 #
 # Generated include files
@@ -129,6 +131,19 @@ x509.genkey
 
 # Kconfig presets
 all.config
+
+#
+# Build output (O=out) and workflow artifacts
+#
+/out/
+/dist/
+/build.log
+
+#
+# Local notes: keep them on disk, never commit them
+#
+/BUILD_ENV.md
+/PORTING_NOTES.md
 
 # Kdevelop4
 *.kdev4

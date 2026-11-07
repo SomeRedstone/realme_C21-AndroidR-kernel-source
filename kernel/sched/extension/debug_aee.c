@@ -376,7 +376,9 @@ void print_cfs_rq_at_AEE(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 	s64 MIN_vruntime = -1, min_vruntime, max_vruntime = -1,
 		spread, rq0_min_vruntime, spread0;
 	struct rq *rq = cpu_rq(cpu);
+#ifdef CONFIG_SCHED_DEBUG
 	struct sched_entity *last;
+#endif
 	unsigned long flags;
 	int locked;
 #ifdef CONFIG_FAIR_GROUP_SCHED
@@ -393,9 +395,11 @@ void print_cfs_rq_at_AEE(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 			&flags, m, "print_cfs_rq_at_AEE");
 	if (rb_first_cached(&cfs_rq->tasks_timeline))
 		MIN_vruntime = (__pick_first_entity(cfs_rq))->vruntime;
+#ifdef CONFIG_SCHED_DEBUG
 	last = __pick_last_entity(cfs_rq);
 	if (last)
 		max_vruntime = last->vruntime;
+#endif
 	min_vruntime = cfs_rq->min_vruntime;
 	rq0_min_vruntime = cpu_rq(0)->cfs.min_vruntime;
 	if (locked)
@@ -416,8 +420,10 @@ void print_cfs_rq_at_AEE(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 #ifdef DEBUG
 	SEQ_printf_at_AEE(m, "  .%-30s: %lu\n", "spread0",
 		SPLIT_NS(spread0));
+#ifdef CONFIG_SCHED_DEBUG
 	SEQ_printf_at_AEE(m, "  .%-30s: %d\n", "nr_spread_over",
 		cfs_rq->nr_spread_over);
+#endif
 #endif
 
 	SEQ_printf_at_AEE(m, "  .%-30s: %d\n",

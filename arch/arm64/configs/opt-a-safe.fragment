@@ -1,0 +1,18 @@
+# Group A: overhead removal and safe feature enablement.
+# Apply after oppo6765_defconfig, then olddefconfig.
+
+# debug / profiling overhead
+# CONFIG_DEBUG_INFO is not set
+# CONFIG_DEBUG_DEVRES is not set
+# CONFIG_DEBUG_VIRTUAL is not set
+# CONFIG_DEBUG_MEMORY_INIT is not set
+# CONFIG_DEBUG_STACK_USAGE is not set
+CONFIG_PERF_EVENTS=y
+# CONFIG_ZRAM_PERFORMANCE_TEST is not set
+
+# network congestion / queueing, selectable but not default
+CONFIG_TCP_CONG_BBR=y
+CONFIG_NET_SCH_FQ=y
+
+# extra I/O scheduler; mq-deadline and kyber are already built in
+CONFIG_IOSCHED_BFQ=y

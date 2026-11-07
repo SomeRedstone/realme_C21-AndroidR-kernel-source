@@ -200,8 +200,10 @@ jobs:
           ln -sfn vendor-src/source/vendor vendor
           ln -sfn "$GITHUB_WORKSPACE" kernel-4.19
           ln -sfn "$GITHUB_WORKSPACE" vendor-src/source/kernel-4.19
-          test -d "$GITHUB_WORKSPACE/vendor/oplus/kernel"
-          test -d "$GITHUB_WORKSPACE/vendor/oplus/kernel_4.19/ext4"
+          # the tree includes $(srctree)/../vendor, so the link lives one
+          # level above the checkout, not inside it
+          test -d "$GITHUB_WORKSPACE/../vendor/oplus/kernel"
+          test -d "$GITHUB_WORKSPACE/../vendor/oplus/kernel_4.19/ext4"
 
       - name: Cache ccache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9

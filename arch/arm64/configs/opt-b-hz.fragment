@@ -1,0 +1,4 @@
+# Group B1: 300 Hz tick. PREEMPT=y and NO_HZ_IDLE stay unchanged.
+# 300 Hz is the mobile/Android choice and divides the 60 Hz panel exactly.
+# CONFIG_HZ_250 is not set
+CONFIG_HZ_300=y

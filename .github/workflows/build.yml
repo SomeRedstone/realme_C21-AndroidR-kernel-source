@@ -145,8 +145,15 @@ jobs:
 
       - name: Install build deps
         run: |
+          set -euo pipefail
+          # disk-space-reclaimer repoints /etc/apt/sources.list at a mirror that
+          # can be dead (mirror.enzu.com had no Release files); the image's own
+          # sources.list.d/ubuntu.sources is left alone.
+          if [ -s /etc/apt/sources.list ]; then
+            sudo sed -i -E 's|^(deb(-src)? )|# \1|' /etc/apt/sources.list
+          fi
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             bc bison build-essential ccache cpio curl device-tree-compiler \
             flex git libelf-dev libssl-dev lz4 python3 rsync unzip xz-utils \
             zip zstd

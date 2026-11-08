@@ -310,12 +310,14 @@ jobs:
             ccache-
 
       - name: Configure and build
+        id: build
         env:
           DEFCONFIG: ${{ inputs.defconfig || 'oppo6765_defconfig' }}
           FRAGMENTS: ${{ steps.groups.outputs.fragments }}
           EXTRA_CONFIG: ${{ inputs.extra_config }}
         run: |
           set -euo pipefail
+          echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
           export PATH="$HOME/toolchains/bin:$HOME/toolchains/clang-r383902/bin:$HOME/toolchains/aarch64-linux-android-4.9/bin:$PATH"
           export CCACHE_DIR="$HOME/.ccache"
           export CCACHE_CPP2=yes
@@ -341,6 +343,7 @@ jobs:
 
           make "${args[@]}" -j"$(nproc)" 2>&1 | tee build.log
           ccache --show-stats | tail -6
+          echo "finished=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Check output
         run: |
@@ -353,30 +356,6 @@ jobs:
           echo "errors:   $(grep -c ' error:' build.log || true)"
           echo "warnings: $(grep -c ' warning:' build.log || true)"
           grep 'module_layout' out/Module.symvers
-
-      - name: Summary
-        run: |
-          set -euo pipefail
-          release=$(sed -n 's/^#define UTS_RELEASE "\(.*\)"/\1/p' out/include/generated/utsrelease.h)
-          susfs=$(sed -n 's/^#define SUSFS_VERSION "\(.*\)"/\1/p' include/linux/susfs.h)
-          ksu=$(grep -oE 'KernelSU-Next version( override)?: [0-9]+' build.log | tail -1 | grep -oE '[0-9]+$')
-          ksu_tag=$(grep -oE 'KernelSU-Next tag: .*' build.log | tail -1 | sed 's/.*: //')
-          ksu_commit=$(sed -n 's/^commit=//p' .github/ksu-next.pin)
-          {
-            echo "### $release"
-            echo
-            echo "| item | value |"
-            echo "| --- | --- |"
-            echo "| defconfig | ${{ inputs.defconfig || 'oppo6765_defconfig' }} |"
-            echo "| patch groups | ${{ steps.groups.outputs.selected }} |"
-            echo "| kernel | $release |"
-            echo "| SUSFS | $susfs |"
-            echo "| KernelSU-Next | $ksu ($ksu_tag) |"
-            echo "| KernelSU-Next commit | \`$ksu_commit\` |"
-            echo "| kernel commit | \`$(git rev-parse HEAD)\` |"
-            echo "| warnings | $(grep -c ' warning:' build.log || true) |"
-            echo "| errors | $(grep -c ' error:' build.log || true) |"
-          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package AnyKernel3
         id: package
@@ -432,6 +411,57 @@ jobs:
             --dtb out/arch/arm64/boot/dts/mediatek/mt6765.dtb
           rm -f dist/stock-boot.img
           sha256sum "dist/$ARTIFACT-boot.img"
+
+      - name: Summary
+        env:
+          DEFCONFIG: ${{ inputs.defconfig || 'oppo6765_defconfig' }}
+          PATCH_GROUPS: ${{ steps.groups.outputs.selected }}
+          ARTIFACT: ${{ steps.package.outputs.name }}
+          STARTED: ${{ steps.build.outputs.started }}
+          FINISHED: ${{ steps.build.outputs.finished }}
+          BOOT_IMG_URL: ${{ inputs.boot_img_url }}
+        run: |
+          set -euo pipefail
+          release=$(sed -n 's/^#define UTS_RELEASE "\(.*\)"/\1/p' out/include/generated/utsrelease.h)
+          susfs=$(sed -n 's/^#define SUSFS_VERSION "\(.*\)"/\1/p' include/linux/susfs.h)
+          ksu=$(grep -oE 'KernelSU-Next version( override)?: [0-9]+' build.log | tail -1 | grep -oE '[0-9]+$')
+          ksu_tag=$(grep -oE 'KernelSU-Next tag: .*' build.log | tail -1 | sed 's/.*: //')
+          ksu_commit=$(sed -n 's/^commit=//p' .github/ksu-next.pin)
+          warnings=$(grep -c ' warning:' build.log || true)
+          errors=$(grep -c ' error:' build.log || true)
+          elapsed=$(( FINISHED - STARTED ))
+          boot_source=stock/boot.img
+          if [ -n "$BOOT_IMG_URL" ]; then
+            boot_source="custom URL"
+          fi
+          kernel_size=$(du -h --apparent-size out/arch/arm64/boot/Image.gz | cut -f1)
+          zip_size=$(du -h --apparent-size "dist/$ARTIFACT.zip" | cut -f1)
+          img_size=$(du -h --apparent-size "dist/$ARTIFACT-boot.img" | cut -f1)
+
+          {
+            echo "### realme C21 - $release"
+            echo
+            echo "| item | value |"
+            echo "| --- | --- |"
+            echo "| defconfig | \`$DEFCONFIG\` |"
+            echo "| patch groups | \`$PATCH_GROUPS\` |"
+            echo "| SUSFS | $susfs |"
+            echo "| KernelSU-Next | $ksu ($ksu_tag) |"
+            echo "| KernelSU-Next commit | \`${ksu_commit:0:12}\` |"
+            echo "| kernel commit | \`$(git rev-parse --short HEAD)\` |"
+            echo "| build time | $((elapsed / 60))m $((elapsed % 60))s |"
+            echo "| warnings / errors | $warnings / $errors |"
+            echo "| Image.gz | $kernel_size |"
+            echo "| AnyKernel3 | $zip_size |"
+            echo "| boot.img | $img_size |"
+            echo "| boot.img source | $boot_source |"
+            echo
+            echo "**sha256**"
+            echo
+            echo '```'
+            (cd dist && sha256sum "$ARTIFACT.zip" "$ARTIFACT-boot.img")
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

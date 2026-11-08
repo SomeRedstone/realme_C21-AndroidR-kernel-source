@@ -11,6 +11,9 @@ on:
       extra_config:
         description: path to a config fragment applied after defconfig
         default: ""
+      groups:
+        description: "patch groups to apply: all, none, or a comma/space list of a,b1,b2,b3,b5"
+        default: all
       sync_ksu:
         description: update drivers/kernelsu to the latest legacy commit first
         type: boolean
@@ -75,6 +78,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
 
       - name: Sync KernelSU-Next legacy
         id: sync
@@ -142,6 +147,82 @@ jobs:
           git commit -q -m "chore(ksu): update KernelSU-Next legacy to ${upstream:0:8}"
 
           echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Select patch groups
+        id: groups
+        shell: bash
+        env:
+          PATCH_GROUPS: ${{ inputs.groups || 'all' }}
+        run: |
+          set -euo pipefail
+
+          raw=$(printf '%s' "$PATCH_GROUPS" | tr '[:upper:]' '[:lower:]' | tr ',' ' ')
+          set -- $raw
+          if [ $# -eq 0 ]; then
+            set -- all
+          fi
+
+          selected=""
+          if [ "$1" = "all" ] && [ $# -eq 1 ]; then
+            selected="a b1 b2 b3 b5"
+          elif [ "$1" = "none" ] && [ $# -eq 1 ]; then
+            selected=""
+          else
+            for g in "$@"; do
+              case "$g" in
+                all|none)
+                  echo "::error::$g cannot be combined with other groups"
+                  exit 1
+                  ;;
+                a|b1|b2|b3|b5) ;;
+                *)
+                  echo "::error::unknown patch group: $g (expected all, none, a, b1, b2, b3 or b5)"
+                  exit 1
+                  ;;
+              esac
+              case " $selected " in
+                *" $g "*) continue ;;
+              esac
+              selected="$selected $g"
+            done
+            selected="${selected# }"
+          fi
+
+          echo "selected groups: ${selected:-none}"
+
+          for g in b5 b3 b2 b1 a; do
+            case " $selected " in
+              *" $g "*) continue ;;
+            esac
+            sha=$(git log --format=%H --grep="^perf(group-$g):" -1)
+            if [ -z "$sha" ]; then
+              echo "::error::no commit found for patch group $g"
+              exit 1
+            fi
+            echo "reverting group $g ($sha)"
+            git revert --no-commit --no-edit "$sha"
+          done
+
+          fragments=""
+          case " $selected " in *" a "*)  fragments="$fragments arch/arm64/configs/opt-a-safe.fragment" ;; esac
+          case " $selected " in *" b1 "*) fragments="$fragments arch/arm64/configs/opt-b-hz.fragment" ;; esac
+          case " $selected " in *" b3 "*) fragments="$fragments arch/arm64/configs/opt-b3-touch.fragment" ;; esac
+          case " $selected " in *" b5 "*) fragments="$fragments arch/arm64/configs/opt-b5-trim.fragment" ;; esac
+          for f in $fragments; do
+            test -f "$f" || { echo "::error::selected group fragment is missing: $f"; exit 1; }
+          done
+
+          slug=$(printf '%s' "$selected" | tr ' ' '-')
+          tag=""
+          if [ "$selected" != "a b1 b2 b3 b5" ]; then
+            tag="-g${slug:-none}"
+          fi
+
+          {
+            echo "selected=${selected:-none}"
+            echo "fragments=$fragments"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install build deps
         run: |
@@ -231,6 +312,7 @@ jobs:
       - name: Configure and build
         env:
           DEFCONFIG: ${{ inputs.defconfig || 'oppo6765_defconfig' }}
+          FRAGMENTS: ${{ steps.groups.outputs.fragments }}
           EXTRA_CONFIG: ${{ inputs.extra_config }}
         run: |
           set -euo pipefail
@@ -244,9 +326,15 @@ jobs:
                 CROSS_COMPILE=aarch64-linux-androidkernel- LD=ld.lld NM=llvm-nm OBJCOPY=llvm-objcopy)
 
           make "${args[@]}" "$DEFCONFIG"
-          if [ -n "$EXTRA_CONFIG" ]; then
-            test -f "$EXTRA_CONFIG"
-            cat "$EXTRA_CONFIG" >> out/.config
+          if [ -n "$FRAGMENTS" ] || [ -n "$EXTRA_CONFIG" ]; then
+            for f in $FRAGMENTS; do
+              test -f "$f"
+              cat "$f" >> out/.config
+            done
+            if [ -n "$EXTRA_CONFIG" ]; then
+              test -f "$EXTRA_CONFIG"
+              cat "$EXTRA_CONFIG" >> out/.config
+            fi
             make "${args[@]}" olddefconfig
           fi
           grep -c '^CONFIG_KSU_SUSFS' out/.config
@@ -280,6 +368,7 @@ jobs:
             echo "| item | value |"
             echo "| --- | --- |"
             echo "| defconfig | ${{ inputs.defconfig || 'oppo6765_defconfig' }} |"
+            echo "| patch groups | ${{ steps.groups.outputs.selected }} |"
             echo "| kernel | $release |"
             echo "| SUSFS | $susfs |"
             echo "| KernelSU-Next | $ksu ($ksu_tag) |"
@@ -291,13 +380,15 @@ jobs:
 
       - name: Package AnyKernel3
         id: package
+        env:
+          GROUPS_TAG: ${{ steps.groups.outputs.tag }}
         run: |
           set -euo pipefail
           release=$(sed -n 's/^#define UTS_RELEASE "\(.*\)"/\1/p' out/include/generated/utsrelease.h)
           susfs=$(sed -n 's/^#define SUSFS_VERSION "\(.*\)"/\1/p' include/linux/susfs.h)
           ksu=$(grep -oE 'KernelSU-Next version( override)?: [0-9]+' build.log | tail -1 | grep -oE '[0-9]+$')
           short=$(git rev-parse --short HEAD)
-          name="realme-c21-${release}-ksun-susfs${susfs#v}-${short}"
+          name="realme-c21-${release}-ksun-susfs${susfs#v}-${short}${GROUPS_TAG}"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
 

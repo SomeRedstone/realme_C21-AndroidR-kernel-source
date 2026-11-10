@@ -1,6 +1,6 @@
 # KernelSU-Next legacy tree currently in drivers/kernelsu.
 # Updated by the sync step in .github/workflows/build.yml; keep in sync with
 # KSU_VERSION_OVERRIDE in drivers/kernelsu/Kbuild.
-commit=b933b1f728116a456fbebf27b6a8772a640cdf23
+commit=e5f5ec998de88b9fc43c62cff8f7ae12d3f4800a
 tag=v3.4.0-legacy
-version=33318
+version=33327

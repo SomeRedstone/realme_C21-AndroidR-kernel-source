@@ -1,5 +1,5 @@
 diff --git a/drivers/kernelsu/Kbuild b/drivers/kernelsu/Kbuild
-index 6eb4b24..c747a9b 100644
+index f7e8d52..805d396 100644
 --- a/drivers/kernelsu/Kbuild
 +++ b/drivers/kernelsu/Kbuild
 @@ -1,5 +1,10 @@
@@ -13,7 +13,7 @@ index 6eb4b24..c747a9b 100644
  kernelsu-objs += compat/kernel_compat.o
  kernelsu-objs += feature/kernel_umount.o
  kernelsu-objs += feature/sulog.o
-@@ -256,11 +261,18 @@ $(shell sed -i '/^extern void __init mnt_init/a int path_umount(struct path *pat
+@@ -265,6 +270,12 @@ $(shell sed -i '/^extern void __init mnt_init/a int path_umount(struct path *pat
  $(info -- KSU_NEXT: adding 'int path_umount(struct path *path, int flags);' to $(srctree)/fs/internal.h)
  endif
  
@@ -25,8 +25,10 @@ index 6eb4b24..c747a9b 100644
 +ifeq ($(shell [ $(VERSION) -gt 5 ] || { [ $(VERSION) -eq 5 ] && [ $(PATCHLEVEL) -ge 9 ]; } && echo yes),yes)
  ifneq ($(shell grep -q "atomic_t filter_count;" $(srctree)/include/linux/seccomp.h; echo $$?),0)
  $(info -- KSU_NEXT: patching struct seccomp for filter_count)
- $(shell sed -i '/int mode;/a\	atomic_t filter_count;' $(srctree)/include/linux/seccomp.h)
- $(shell sed -i '/#include <linux\/thread_info.h>/a\#include <linux/atomic.h>' $(srctree)/include/linux/seccomp.h)
+ $(shell sed -i \
+@@ -272,6 +283,7 @@ $(shell sed -i \
+         -e '/#include <linux\/thread_info.h>/a\#include <linux/atomic.h>' \
+ $(srctree)/include/linux/seccomp.h)
  endif
 +endif
  
